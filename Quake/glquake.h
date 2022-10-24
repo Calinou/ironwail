@@ -394,6 +394,8 @@ typedef struct gpuframedata_s {
 	float	viewproj[16];
 	float	fogdata[4];
 	float	skyfogdata[4];
+	vec3_t	winddir;
+	float	windphase;
 	vec3_t	eyepos;
 	float	time;
 	float	zlogscale;
@@ -573,6 +575,7 @@ void Sky_NewMap (void);
 void Sky_LoadTexture (qmodel_t *m, texture_t *mt);
 void Sky_LoadTextureQ64 (qmodel_t *m, texture_t *mt);
 void Sky_LoadSkyBox (const char *name);
+void Sky_SetupFrame (void);
 
 void GL_BindBuffer (GLenum target, GLuint buffer);
 void GL_BindBufferRange (GLenum target, GLuint index, GLuint buffer, GLintptr offset, GLsizeiptr size);
