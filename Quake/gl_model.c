@@ -2446,14 +2446,14 @@ Returns true if map is playable, false otherwise
 */
 qboolean Mod_LoadMapDescription (char *desc, size_t maxchars, const char *map)
 {
-	static char		buf[16 * 1024];
-	char			path[MAX_QPATH];
-	const char		*data;
-	FILE			*f;
-	lump_t			*entlump;
-	dheader_t		header;
-	int				i, j, k, filesize;
-	qboolean		ret = false;
+	char		buf[4 * 1024];
+	char		path[MAX_QPATH];
+	const char	*data;
+	FILE		*f;
+	lump_t		*entlump;
+	dheader_t	header;
+	int			i, j, k, filesize;
+	qboolean	ret = false;
 
 	if (!maxchars)
 		return false;
@@ -2463,8 +2463,12 @@ qboolean Mod_LoadMapDescription (char *desc, size_t maxchars, const char *map)
 		return false;
 
 	filesize = COM_FOpenFile (path, &f, NULL);
-	if (filesize <= sizeof (header))
+	if (filesize <= (int) sizeof (header))
+	{
+		if (filesize != -1)
+			fclose (f);
 		return false;
+	}
 
 	if (fread (&header, sizeof (header), 1, f) != 1)
 	{

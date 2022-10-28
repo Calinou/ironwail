@@ -373,7 +373,7 @@ typedef struct
 {
 	int				len;
 	int				maxlen;
-	qboolean		(*match) (int index);
+	qboolean		(*match_fn) (int index);
 	double			timeout;
 	double			errtimeout;
 	char			text[32];
@@ -385,6 +385,7 @@ typedef struct
 	int				numitems;
 	int				viewsize;
 	int				scroll;
+	qboolean		(*isactive_fn) (int index);
 	listsearch_t	search;
 } menulist_t;
 
@@ -518,20 +519,31 @@ qboolean M_List_IsItemVisible (const menulist_t *list, int i)
 	return (unsigned)(i - first) < (unsigned)count;
 }
 
-qboolean M_List_SelectNextMatch (menulist_t *list, int start, int dir)
+qboolean M_List_SelectNextMatch (menulist_t *list, qboolean (*match_fn) (int idx), int start, int dir, qboolean wrap)
 {
 	int i, j;
 
-	if (list->numitems <= 0 || !list->search.match)
+	if (list->numitems <= 0)
 		return false;
+
+	if (!wrap)
+		start = CLAMP (0, start, list->numitems - 1);
 
 	for (i = 0, j = start; i < list->numitems; i++, j+=dir)
 	{
 		if (j < 0)
+		{
+			if (!wrap)
+				return false;
 			j = list->numitems - 1;
+		}
 		else if (j >= list->numitems)
+		{
+			if (!wrap)
+				return false;
 			j = 0;
-		if (list->search.match (j))
+		}
+		if (!match_fn || match_fn (j))
 		{
 			list->cursor = j;
 			M_List_AutoScroll (list);
@@ -540,6 +552,27 @@ qboolean M_List_SelectNextMatch (menulist_t *list, int start, int dir)
 	}
 
 	return false;
+}
+
+qboolean M_List_SelectNextSearchMatch (menulist_t *list, int start, int dir)
+{
+	if (!list->search.match_fn)
+		return false;
+	return M_List_SelectNextMatch (list, list->search.match_fn, start, dir, true);
+}
+
+qboolean M_List_SelectNextActive (menulist_t *list, int start, int dir, qboolean wrap)
+{
+	return M_List_SelectNextMatch (list, list->isactive_fn, start, dir, wrap);
+}
+
+void M_List_UpdateMouseSelection (menulist_t *list)
+{
+	M_ForceMousemove ();
+	if (list->cursor < list->scroll)
+		M_List_SelectNextActive (list, list->scroll, 1, false);
+	else if (list->cursor >= list->scroll + list->viewsize)
+		M_List_SelectNextActive (list, list->scroll + list->viewsize, -1, false);
 }
 
 void M_List_Update (menulist_t *list)
@@ -588,13 +621,12 @@ qboolean M_List_Key (menulist_t *list, int key)
 		S_LocalSound ("misc/menu1.wav");
 		if (list->search.len)
 		{
-			M_List_SelectNextMatch (list, 0, 1);
+			M_List_SelectNextSearchMatch (list, 0, 1);
 			list->search.timeout = SEARCH_NAV_TIMEOUT;
 		}
 		else
 		{
-			list->cursor = 0;
-			M_List_AutoScroll (list);
+			M_List_SelectNextActive (list, 0, 1, false);
 		}
 		return true;
 
@@ -603,13 +635,12 @@ qboolean M_List_Key (menulist_t *list, int key)
 		S_LocalSound ("misc/menu1.wav");
 		if (list->search.len)
 		{
-			M_List_SelectNextMatch (list, list->numitems - 1, -1);
+			M_List_SelectNextSearchMatch (list, list->numitems - 1, -1);
 			list->search.timeout = SEARCH_NAV_TIMEOUT;
 		}
 		else
 		{
-			list->cursor = list->numitems - 1;
-			M_List_AutoScroll (list);
+			M_List_SelectNextActive (list, list->numitems - 1, -1, false);
 		}
 		return true;
 
@@ -618,17 +649,18 @@ qboolean M_List_Key (menulist_t *list, int key)
 		S_LocalSound ("misc/menu1.wav");
 		if (list->search.len)
 		{
-			M_List_SelectNextMatch (list, list->cursor + 1, 1);
+			M_List_SelectNextSearchMatch (list, list->cursor + 1, 1);
 			list->search.timeout = SEARCH_NAV_TIMEOUT;
 		}
 		else
 		{
+			qboolean sel;
 			if (list->cursor - list->scroll < list->viewsize - 1)
-				list->cursor = list->scroll + list->viewsize - 1;
+				sel = M_List_SelectNextActive (list, list->scroll + list->viewsize - 1, 1, false);
 			else
-				list->cursor += list->viewsize - 1;
-			list->cursor = q_min (list->cursor, list->numitems - 1);
-			M_List_AutoScroll (list);
+				sel = M_List_SelectNextActive (list, list->cursor + list->viewsize - 1, 1, false);
+			if (!sel)
+				M_List_SelectNextActive (list, list->numitems - 1, -1, false);
 		}
 		return true;
 
@@ -637,17 +669,18 @@ qboolean M_List_Key (menulist_t *list, int key)
 		S_LocalSound ("misc/menu1.wav");
 		if (list->search.len)
 		{
-			M_List_SelectNextMatch (list, list->cursor - 1, -1);
+			M_List_SelectNextSearchMatch (list, list->cursor - 1, -1);
 			list->search.timeout = SEARCH_NAV_TIMEOUT;
 		}
 		else
 		{
+			qboolean sel;
 			if (list->cursor > list->scroll)
-				list->cursor = list->scroll;
+				sel = M_List_SelectNextActive (list, list->scroll, -1, false);
 			else
-				list->cursor -= list->viewsize - 1;
-			list->cursor = q_max (list->cursor, 0);
-			M_List_AutoScroll (list);
+				sel = M_List_SelectNextActive (list, list->cursor - list->viewsize + 1, -1, false);
+			if (!sel)
+				M_List_SelectNextActive (list, 0, 1, false);
 		}
 		return true;
 
@@ -656,14 +689,12 @@ qboolean M_List_Key (menulist_t *list, int key)
 		S_LocalSound ("misc/menu1.wav");
 		if (list->search.len)
 		{
-			M_List_SelectNextMatch (list, list->cursor - 1, -1);
+			M_List_SelectNextSearchMatch (list, list->cursor - 1, -1);
 			list->search.timeout = SEARCH_NAV_TIMEOUT;
 		}
 		else
 		{
-			if (--list->cursor < 0)
-				list->cursor = list->numitems - 1;
-			M_List_AutoScroll (list);
+			M_List_SelectNextActive (list, list->cursor - 1, -1, true);
 		}
 		return true;
 
@@ -671,7 +702,7 @@ qboolean M_List_Key (menulist_t *list, int key)
 		list->scroll -= 3;
 		if (list->scroll < 0)
 			list->scroll = 0;
-		M_ForceMousemove ();
+		M_List_UpdateMouseSelection (list);
 		return true;
 
 	case K_MWHEELDOWN:
@@ -680,7 +711,7 @@ qboolean M_List_Key (menulist_t *list, int key)
 			list->scroll = list->numitems - list->viewsize;
 		if (list->scroll < 0)
 			list->scroll = 0;
-		M_ForceMousemove ();
+		M_List_UpdateMouseSelection (list);
 		return true;
 
 	case K_DOWNARROW:
@@ -688,14 +719,12 @@ qboolean M_List_Key (menulist_t *list, int key)
 		S_LocalSound ("misc/menu1.wav");
 		if (list->search.len)
 		{
-			M_List_SelectNextMatch (list, list->cursor + 1, 1);
+			M_List_SelectNextSearchMatch (list, list->cursor + 1, 1);
 			list->search.timeout = SEARCH_NAV_TIMEOUT;
 		}
 		else
 		{
-			if (++list->cursor >= list->numitems)
-				list->cursor = 0;
-			M_List_AutoScroll (list);
+			M_List_SelectNextActive (list, list->cursor + 1, 1, true);
 		}
 		return true;
 
@@ -708,7 +737,7 @@ void M_List_Char (menulist_t *list, int key)
 {
 	int maxlen, start;
 
-	if (list->numitems <= 0 || !list->search.match)
+	if (list->numitems <= 0 || !list->search.match_fn)
 		return;
 
 	maxlen = (int) countof (list->search.text) - 1;
@@ -734,7 +763,7 @@ void M_List_Char (menulist_t *list, int key)
 	if (list->search.len == 1)
 		start++;
 
-	if (!M_List_SelectNextMatch (list, start, 1))
+	if (!M_List_SelectNextSearchMatch (list, start, 1))
 	{
 		list->search.len--;
 		list->search.text[list->search.len] = '\0';
@@ -746,19 +775,46 @@ void M_List_Char (menulist_t *list, int key)
 
 void M_List_Mousemove (menulist_t *list, int yrel)
 {
-	int firstvis, numvis;
+	int i, firstvis, numvis;
+
 	M_List_GetVisibleRange (list, &firstvis, &numvis);
-	if (!numvis)
+	if (!numvis || yrel < 0)
 		return;
-	yrel /= 8;
-	if (yrel < 0)
+	i = yrel / 8;
+	if (i >= numvis)
 		return;
-	if (yrel >= numvis)
+
+	i += firstvis;
+	if (list->cursor == i)
 		return;
-	yrel += firstvis;
-	if (list->cursor == yrel)
-		return;
-	list->cursor = yrel;
+
+	if (list->isactive_fn && !list->isactive_fn (i))
+	{
+		int before, after;
+		yrel += firstvis * 8;
+
+		for (before = i - 1; before >= firstvis; before--)
+			if (list->isactive_fn (before))
+				break;
+		for (after = i + 1; after < firstvis + numvis; after++)
+			if (list->isactive_fn (after))
+				break;
+
+		if (before >= firstvis && after < firstvis + numvis)
+		{
+			int distbefore = yrel - 4 - before * 8;
+			int distafter = after * 8 + 4 - yrel;
+			i = distbefore < distafter ? before : after;
+		}
+		else if (before >= firstvis)
+			i = before;
+		else if (after < firstvis + numvis)
+			i = after;
+		else
+			return;
+	}
+
+	list->cursor = i;
 }
 
 
@@ -1259,10 +1315,10 @@ void M_Save_Mousemove (int cx, int cy)
 
 typedef struct
 {
-	const char		*name;
-	const char		*message;
-	int				mapidx;
-	qboolean		active;
+	const char				*name;
+	const filelist_item_t	*source;
+	int						mapidx;
+	qboolean				active;
 } mapitem_t;
 
 static struct
@@ -1277,6 +1333,12 @@ static struct
 	mapitem_t		*items;
 } mapsmenu;
 
+const char *M_Maps_GetMessage (const mapitem_t *item)
+{
+	if (!item->source)
+		return item->name;
+	return ExtraMaps_GetMessage (item->source);
+}
 
 static qboolean M_Maps_IsActive (const char *map)
 {
@@ -1287,8 +1349,7 @@ static void M_Maps_AddDecoration (const char *text)
 {
 	mapitem_t item;
 	memset (&item, 0, sizeof (item));
-	item.name = "";
-	item.message = text;
+	item.name = text;
 	item.mapidx = -1;
 	VEC_PUSH (mapsmenu.items, item);
 	mapsmenu.list.numitems++;
@@ -1323,61 +1384,35 @@ static void M_Maps_AddSeparator (maptype_t before, maptype_t after)
 	#undef QBAR
 }
 
-static filelist_item_t **M_Maps_Sort (void)
-{
-	int counts[MAPTYPE_COUNT];
-	int i, sum;
-	filelist_item_t *item, **sorted_items;
-
-	if (!extralevels)
-		return NULL;
-
-	memset (counts, 0, sizeof (counts));
-	for (item = extralevels; item; item = item->next)
-		counts[ExtraMaps_GetType (item)]++;
-
-	for (i = sum = 0; i < MAPTYPE_COUNT; i++)
-	{
-		int tmp = counts[i];
-		counts[i] = sum;
-		sum += tmp;
-	}
-	sum++; // NULL terminator
-
-	sorted_items = (filelist_item_t **) malloc (sum * sizeof (*sorted_items));
-	if (!sorted_items)
-	{
-		Con_Warning ("M_Maps_Sort: out of memory on %d items\n", sum);
-		return NULL;
-	}
-
-	for (item = extralevels; item; item = item->next)
-		sorted_items[counts[ExtraMaps_GetType (item)]++] = item;
-	sorted_items[sum - 1] = NULL;
-
-	return sorted_items;
-}
-
 static qboolean M_Maps_Match (int index)
 {
-	if (!mapsmenu.items[index].name[0])
+	const char *message;
+	if (mapsmenu.items[index].mapidx < 0)
 		return false;
-	return
-		q_strcasestr (mapsmenu.items[index].name, mapsmenu.list.search.text) ||
-		q_strcasestr (mapsmenu.items[index].message, mapsmenu.list.search.text)
-	;
+
+	if (q_strcasestr (mapsmenu.items[index].name, mapsmenu.list.search.text))
+		return true;
+
+	message = M_Maps_GetMessage (&mapsmenu.items[index]);
+	return message && q_strcasestr (message, mapsmenu.list.search.text);
+}
+
+static qboolean M_Maps_IsSelectable (int index)
+{
+	return mapsmenu.items[index].source != NULL;
 }
 
 static void M_Maps_Init (void)
 {
-	filelist_item_t **sorted_items;
+	int i, type, prev_type;
 
 	mapsmenu.x = 8;
 	mapsmenu.y = 32;
 	mapsmenu.cols = 38;
 	mapsmenu.scrollbar_grab = false;
 	memset (&mapsmenu.list.search, 0, sizeof (mapsmenu.list.search));
-	mapsmenu.list.search.match = M_Maps_Match;
+	mapsmenu.list.search.match_fn = M_Maps_Match;
+	mapsmenu.list.isactive_fn = M_Maps_IsSelectable;
 	mapsmenu.list.viewsize = MAX_VIS_MAPS;
 	mapsmenu.list.cursor = -1;
 	mapsmenu.list.scroll = 0;
@@ -1385,32 +1420,26 @@ static void M_Maps_Init (void)
 	mapsmenu.mapcount = 0;
 	VEC_CLEAR (mapsmenu.items);
 
-	sorted_items = M_Maps_Sort ();
-	if (sorted_items)
+	for (i = 0, prev_type = -1; extralevels_sorted[i]; i++)
 	{
-		int i, type, prev_type;
+		mapitem_t map;
+		filelist_item_t *item = extralevels_sorted[i];
 
-		for (i = 0, prev_type = -1; sorted_items[i]; i++)
-		{
-			mapitem_t map;
-			filelist_item_t *item = sorted_items[i];
+		type = ExtraMaps_GetType (item);
+		if (type >= MAPTYPE_BMODEL)
+			continue;
+		if (prev_type != -1 && prev_type != type)
+			M_Maps_AddSeparator (prev_type, type);
+		prev_type = type;
 
-			type = ExtraMaps_GetType (item);
-			if (prev_type != -1 && prev_type != type)
-				M_Maps_AddSeparator (prev_type, type);
-			prev_type = type;
-
-			map.name = item->name;
-			map.active = M_Maps_IsActive (item->name);
-			map.message = (const char *) (item + 1);
-			map.mapidx = mapsmenu.mapcount++;
-			if (map.active || (mapsmenu.list.cursor == -1 && ExtraMaps_IsStart (type)))
-				mapsmenu.list.cursor = VEC_SIZE (mapsmenu.items);
-			VEC_PUSH (mapsmenu.items, map);
-			mapsmenu.list.numitems++;
-		}
-
-		free (sorted_items);
+		map.name = item->name;
+		map.active = M_Maps_IsActive (item->name);
+		map.source = item;
+		map.mapidx = mapsmenu.mapcount++;
+		if (map.active || (mapsmenu.list.cursor == -1 && ExtraMaps_IsStart (type)))
+			mapsmenu.list.cursor = VEC_SIZE (mapsmenu.items);
+		VEC_PUSH (mapsmenu.items, map);
+		mapsmenu.list.numitems++;
 	}
 
 	if (mapsmenu.list.cursor == -1)
@@ -1473,12 +1502,13 @@ void M_Maps_Draw (void)
 	{
 		int idx = i + firstvis;
 		const mapitem_t *item = &mapsmenu.items[idx];
+		const char *message = M_Maps_GetMessage (item);
 		int mask = item->active ? 128 : 0;
 		qboolean selected = (idx == mapsmenu.list.cursor);
 
-		if (!item->name[0])
+		if (!item->source)
 		{
-			M_PrintWhite (x + (cols - strlen (item->message))/2*8, y + i*8, item->message);
+			M_PrintWhite (x + (cols - strlen (item->name))/2*8, y + i*8, item->name);
 		}
 		else
 		{
@@ -1495,20 +1525,29 @@ void M_Maps_Draw (void)
 			for (j = 0; j < namecols - 2 && buf[j]; j++)
 				M_DrawCharacter (x + j*8, y + i*8, buf[j] ^ mask);
 
-			if (item->message[0])
+			if (!message || message[0])
 			{
-				if (mapsmenu.list.search.len > 0)
-					COM_TintSubstring (item->message, mapsmenu.list.search.text, buf, sizeof (buf));
+				if (!message)
+				{
+					memset (buf, '.' | 0x80, desccols);
+					buf[desccols] = '\0';
+				}
+				else if (mapsmenu.list.search.len > 0)
+					COM_TintSubstring (message, mapsmenu.list.search.text, buf, sizeof (buf));
 				else
-					q_strlcpy (buf, item->message, sizeof (buf));
+					q_strlcpy (buf, message, sizeof (buf));
 
 				GL_SetCanvasColor (1, 1, 1, 0.375f);
 				for (/**/; j < namecols; j++)
 					M_DrawCharacter (x + j*8, y + i*8, '.' | mask);
-				GL_SetCanvasColor (1, 1, 1, 1);
+				if (message)
+					GL_SetCanvasColor (1, 1, 1, 1);
 
 				M_PrintScroll (x + namecols*8, y + i*8, desccols*8, buf,
 					selected ? mapsmenu.scroll_time : 0.0, true);
+				
+				if (!message)
+					GL_SetCanvasColor (1, 1, 1, 1);
 			}
 		}
 
@@ -1638,6 +1677,7 @@ void M_Maps_Mousemove (int cx, int cy)
 
 int			m_skill_cursor;
 qboolean	m_skill_usegfx;
+qboolean	m_skill_usecustomtitle;
 char		m_skill_mapname[MAX_QPATH];
 enum m_state_e m_skill_prevmenu;
 
@@ -1663,7 +1703,7 @@ void M_Skill_Draw (void)
 	qpic_t	*p;
 
 	M_DrawTransPic (16, 4, Draw_CachePic ("gfx/qplaque.lmp") );
-	p = Draw_CachePic ("gfx/ttl_sgl.lmp");
+	p = Draw_CachePic (m_skill_usecustomtitle ? "gfx/p_skill.lmp" : "gfx/ttl_sgl.lmp");
 	M_DrawPic ( (320-p->width)/2, 4, p);
 
 	if (m_skill_usegfx)
@@ -4067,7 +4107,7 @@ static void M_Mods_Init (void)
 	modsmenu.cols = 28;
 	modsmenu.scrollbar_grab = false;
 	memset (&modsmenu.list.search, 0, sizeof (modsmenu.list.search));
-	modsmenu.list.search.match = M_Mods_Match;
+	modsmenu.list.search.match_fn = M_Mods_Match;
 	modsmenu.list.viewsize = MAX_VIS_MODS;
 	modsmenu.list.cursor = -1;
 	modsmenu.list.scroll = 0;
@@ -4666,7 +4706,8 @@ void M_CheckMods (void)
 {
 	const unsigned int
 		main_hashes[] = {0x136bc7fd, 0x90555cb4},
-		sp_hashes[] = {0x86a6f086}
+		sp_hashes[] = {0x86a6f086},
+		sgl_hashes[] = {0x7bba813d}
 	;
 
 	m_main_mods = M_CheckCustomGfx ("gfx/menumods.lmp",
@@ -4677,5 +4718,8 @@ void M_CheckMods (void)
 
 	m_skill_usegfx = M_CheckCustomGfx ("gfx/skillmenu.lmp",
 		"gfx/sp_menu.lmp", 14856, sp_hashes, countof (sp_hashes));
+
+	m_skill_usecustomtitle = M_CheckCustomGfx ("gfx/p_skill.lmp",
+		"gfx/ttl_sgl.lmp", 6728, sgl_hashes, countof (sgl_hashes));
 }
 

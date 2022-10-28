@@ -52,7 +52,7 @@ static void COM_Path_f (void);
 #define PAK0_COUNT_V091		308	/* id1/pak0.pak - v0.91/0.92, not supported */
 #define PAK0_CRC_V091		28804	/* id1/pak0.pak - v0.91/0.92, not supported */
 
-char	com_token[1024];
+THREAD_LOCAL char	com_token[1024];
 int		com_argc;
 char	**com_argv;
 
@@ -1454,7 +1454,7 @@ QUAKE FILESYSTEM
 =============================================================================
 */
 
-int	com_filesize;
+THREAD_LOCAL int com_filesize;
 
 
 //
@@ -1478,7 +1478,7 @@ typedef struct
 char	com_gamenames[1024];	//eg: "hipnotic;quoth;warp" ... no id1
 char	com_gamedir[MAX_OSPATH];
 char	com_basedir[MAX_OSPATH];
-int	file_from_pak;		// ZOID: global indicating that file came from a pak
+THREAD_LOCAL int	file_from_pak;		// ZOID: global indicating that file came from a pak
 
 searchpath_t	*com_searchpaths;
 searchpath_t	*com_base_searchpaths;
@@ -1585,7 +1585,7 @@ static int COM_FindFile (const char *filename, int *handle, FILE **file,
 	searchpath_t	*search;
 	char		netpath[MAX_OSPATH];
 	pack_t		*pak;
-	int		i, findtime;
+	int			i;
 
 	if (file && handle)
 		Sys_Error ("COM_FindFile: both handle and file set");
@@ -1637,8 +1637,7 @@ static int COM_FindFile (const char *filename, int *handle, FILE **file,
 			}
 
 			q_snprintf (netpath, sizeof(netpath), "%s/%s",search->filename, filename);
-			findtime = Sys_FileTime (netpath);
-			if (findtime == -1)
+			if (!Sys_FileExists (netpath))
 				continue;
 
 			if (path_id)
@@ -2255,6 +2254,9 @@ static void COM_Game_f (void)
 		//Write config file
 		Host_WriteConfiguration ();
 
+		// stop parsing map files before changing file system search paths
+		ExtraMaps_Clear ();
+
 		COM_ResetGameDirectories(paths);
 
 		//clear out and reload appropriate data
@@ -2267,7 +2269,7 @@ static void COM_Game_f (void)
 			Draw_NewGame ();
 			R_NewGame ();
 		}
-		ExtraMaps_NewGame ();
+		ExtraMaps_Init ();
 		Host_Resetdemos ();
 		DemoList_Rebuild ();
 		SaveList_Rebuild ();
@@ -2336,7 +2338,7 @@ static qboolean COM_SetBaseDir (const char *path)
 
 	memcpy (pakpath, path, i);
 	memcpy (pakpath + i, pak0, sizeof (pak0));
-	if (Sys_FileTime (pakpath) == -1)
+	if (!Sys_FileExists (pakpath))
 		return false;
 
 	memcpy (com_basedir, path, i);
